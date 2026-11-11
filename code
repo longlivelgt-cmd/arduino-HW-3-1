@@ -1,0 +1,277 @@
+#include <Arduino.h>
+#include <math.h>
+
+// =====================================
+// PIN CONFIGURATION
+// =====================================
+
+const int RED_PIN = 9;
+const int GREEN_PIN = 10;
+const int BLUE_PIN = 11;
+const int BUTTON_PIN = 2;
+
+// =====================================
+// BUTTON SETTINGS
+// =====================================
+
+const unsigned long DEBOUNCE_TIME = 30;
+const unsigned long LONG_PRESS_TIME = 1000;
+
+// With INPUT_PULLUP, unpressed is HIGH and pressed is LOW
+bool lastButtonReading = HIGH;
+bool stableButtonState = HIGH;
+
+unsigned long lastDebounceTime = 0;
+unsigned long buttonPressStart = 0;
+
+bool longPressHandled = false;
+
+// =====================================
+// LIGHTING MODES
+// =====================================
+
+// 0 = Constant Light
+// 1 = Breathing (Smooth pulsing current color)
+// 2 = Aurora (Fast flowing Northern Lights color shift)
+// 3 = Blink (Flashing current color)
+// 4 = Fire Flicker (Flickers current color intensity)
+
+const int MODE_COUNT = 5;
+int currentMode = 0;
+
+// =====================================
+// COLOR SETTINGS (ROYGBV - Common Anode)
+// 0 = Bright, 255 = Off
+// =====================================
+
+const int colors[][3] = {
+  {0, 255, 255},       // Red (Red ON, Green OFF, Blue OFF)
+  {0, 120, 255},       // Orange (Red ON, Green medium, Blue OFF)
+  {0, 30, 255},        // Yellow (Red ON, Green low, Blue OFF)
+  {255, 0, 255},       // Green (Red OFF, Green ON, Blue OFF)
+  {255, 255, 0},       // Blue (Red OFF, Green OFF, Blue ON)
+  {120, 255, 120}      // Violet (Red medium, Green OFF, Blue medium)
+};
+
+const int NUM_COLORS = 6;
+int currentColor = 0;
+
+// =====================================
+// SETUP
+// =====================================
+
+void setup() {
+  pinMode(RED_PIN, OUTPUT);
+  pinMode(GREEN_PIN, OUTPUT);
+  pinMode(BLUE_PIN, OUTPUT);
+
+  // Use internal pull-up (wire button between Pin 2 and GND)
+  pinMode(BUTTON_PIN, INPUT_PULLUP);
+
+  setColor(
+    colors[currentColor][0],
+    colors[currentColor][1],
+    colors[currentColor][2]
+  );
+}
+
+// =====================================
+// MAIN LOOP
+// =====================================
+
+void loop() {
+  handleButton();
+  updateLightMode();
+}
+
+// =====================================
+// BUTTON CONTROL
+// =====================================
+
+void handleButton() {
+  bool reading = digitalRead(BUTTON_PIN);
+  unsigned long now = millis();
+
+  // Detect signal changes
+  if (reading != lastButtonReading) {
+    lastDebounceTime = now;
+  }
+
+  // Debounce
+  if (now - lastDebounceTime >= DEBOUNCE_TIME) {
+    if (reading != stableButtonState) {
+      stableButtonState = reading;
+
+      // BUTTON PRESSED (LOW with INPUT_PULLUP)
+      if (stableButtonState == LOW) {
+        buttonPressStart = now;
+        longPressHandled = false;
+      }
+      // BUTTON RELEASED (HIGH with INPUT_PULLUP)
+      else {
+        // Change color only if it was a short press
+        if (!longPressHandled) {
+          changeColor();
+        }
+      }
+    }
+
+    // LONG PRESS: CHANGE MODE WHILE HELD
+    if (stableButtonState == LOW &&
+        !longPressHandled &&
+        now - buttonPressStart >= LONG_PRESS_TIME) {
+      changeMode();
+      longPressHandled = true; // Prevents release from triggering a color change
+    }
+  }
+
+  lastButtonReading = reading;
+}
+
+// =====================================
+// CHANGE COLOR
+// =====================================
+
+void changeColor() {
+  currentColor++;
+  if (currentColor >= NUM_COLORS) {
+    currentColor = 0;
+  }
+}
+
+// =====================================
+// CHANGE MODE
+// =====================================
+
+void changeMode() {
+  currentMode++;
+  if (currentMode >= MODE_COUNT) {
+    currentMode = 0;
+  }
+}
+
+// =====================================
+// UPDATE LIGHT MODE
+// =====================================
+
+void updateLightMode() {
+  switch (currentMode) {
+    // MODE 0: CONSTANT LIGHT
+    case 0:
+      setColor(
+        colors[currentColor][0],
+        colors[currentColor][1],
+        colors[currentColor][2]
+      );
+      break;
+
+    // MODE 1: BREATHING EFFECT (Smoothly pulses current color)
+    case 1: {
+      unsigned long cycleTime = 3000; // 3 seconds per breath
+      unsigned long t = millis() % cycleTime;
+      
+      float angle = (float)t / cycleTime * 2.0f * 3.14159265f;
+      float breathFactor = (sin(angle) + 1.0f) / 2.0f;
+      breathFactor = 0.1f + (breathFactor * 0.9f); // Min glow floor
+      
+      int rBase = colors[currentColor][0];
+      int gBase = colors[currentColor][1];
+      int bBase = colors[currentColor][2];
+      
+      float rIntensity = (255 - rBase) * breathFactor;
+      float gIntensity = (255 - gBase) * breathFactor;
+      float bIntensity = (255 - bBase) * breathFactor;
+      
+      int r = 255 - (int)rIntensity;
+      int g = 255 - (int)gIntensity;
+      int b = 255 - (int)bIntensity;
+      
+      setColor(r, g, b);
+      break;
+    }
+
+    // MODE 2: AURORA EFFECT (Fast flowing Northern Lights color shift)
+    case 2: {
+      unsigned long t = millis();
+      unsigned long cycleTime = 3000; // 3-second spectrum cycle
+      
+      float angleR = (float)(t % cycleTime) / cycleTime * 2.0f * 3.14159265f;
+      float angleG = (float)((t + cycleTime / 3) % cycleTime) / cycleTime * 2.0f * 3.14159265f;
+      float angleB = (float)((t + (cycleTime * 2) / 3) % cycleTime) / cycleTime * 2.0f * 3.14159265f;
+      
+      float rIntensity = (sin(angleR) + 1.0f) / 2.0f * 0.25f;
+      float gIntensity = (sin(angleG) + 1.0f) / 2.0f;
+      float bIntensity = (sin(angleB) + 1.0f) / 2.0f;
+      
+      int r = 255 - (int)(rIntensity * 255);
+      int g = 255 - (int)(gIntensity * 255);
+      int b = 255 - (int)(bIntensity * 255);
+      
+      setColor(r, g, b);
+      break;
+    }
+
+    // MODE 3: BLINK EFFECT (Flashes current color on/off)
+    case 3: {
+      static unsigned long lastBlink = 0;
+      static bool blinkOn = false;
+      unsigned long now = millis();
+      
+      // Toggle state every 400 milliseconds
+      if (now - lastBlink >= 400) {
+        lastBlink = now;
+        blinkOn = !blinkOn;
+      }
+      
+      if (blinkOn) {
+        setColor(
+          colors[currentColor][0],
+          colors[currentColor][1],
+          colors[currentColor][2]
+        );
+      } else {
+        setColor(255, 255, 255); // Turn completely off
+      }
+      break;
+    }
+
+    // MODE 4: FIRE FLICKER (Flickers current color intensity)
+    case 4: {
+      static unsigned long lastFlicker = 0;
+      unsigned long now = millis();
+      
+      // Update flicker every 50 milliseconds
+      if (now - lastFlicker >= 50) {
+        lastFlicker = now;
+        
+        int rBase = colors[currentColor][0];
+        int gBase = colors[currentColor][1];
+        int bBase = colors[currentColor][2];
+        
+        // Random brightness multiplier between 70% and 100%
+        float flickerFactor = random(70, 101) / 100.0f;
+        
+        float rIntensity = (255 - rBase) * flickerFactor;
+        float gIntensity = (255 - gBase) * flickerFactor;
+        float bIntensity = (255 - bBase) * flickerFactor;
+        
+        int r = 255 - (int)rIntensity;
+        int g = 255 - (int)gIntensity;
+        int b = 255 - (int)bIntensity;
+        
+        setColor(r, g, b);
+      }
+      break;
+    }
+  }
+}
+
+// =====================================
+// RGB LED CONTROL
+// =====================================
+
+void setColor(int red, int green, int blue) {
+  analogWrite(RED_PIN, red);
+  analogWrite(GREEN_PIN, green);
+  analogWrite(BLUE_PIN, blue);
+}
